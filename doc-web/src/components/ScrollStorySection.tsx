@@ -323,16 +323,18 @@ export function ScrollStorySection({ onNavigate }: ScrollStorySectionProps) {
 
           {/* Right scroll-driven timeline rail */}
           <div className="relative pl-8 sm:pl-10">
-            {/* Base vertical hairline rail */}
+            {/* Base vertical rail (x: 7px..9px, center: 8.0px) */}
             <div
               aria-hidden="true"
-              className="absolute top-3 bottom-3 left-2 w-px bg-slate-900/[0.09] dark:bg-white/[0.09]"
+              data-testid="timeline-base-rail"
+              className="absolute top-3 bottom-3 left-[7px] w-[2px] rounded-full bg-slate-900/[0.08] dark:bg-white/[0.08]"
             />
 
-            {/* Continuous scroll-linked indigo beam */}
+            {/* Continuous scroll-linked indigo beam (x: 7px..9px, center: 8.0px) */}
             <div
               aria-hidden="true"
-              className="absolute top-3 left-2 w-[2px] -translate-x-[0.5px] origin-top bg-gradient-to-b from-indigo-500 via-indigo-400 to-amber-400/80 transition-transform duration-150 will-change-transform"
+              data-testid="timeline-progress-beam"
+              className="absolute top-3 left-[7px] w-[2px] origin-top rounded-full bg-gradient-to-b from-indigo-500 via-indigo-400 to-amber-400/80 transition-transform duration-150 will-change-transform"
               style={{
                 height: 'calc(100% - 1.5rem)',
                 transform: `scaleY(${Math.max(0.06, scrollProgress).toFixed(3)})`,
@@ -355,12 +357,13 @@ export function ScrollStorySection({ onNavigate }: ScrollStorySectionProps) {
                     }}
                     className="relative py-4 lg:py-8"
                   >
-                    {/* Timeline node */}
+                    {/* Timeline node (14px circle, x: 1px..15px, center: 8.0px) */}
                     <button
                       type="button"
                       onClick={() => jumpToChapter(idx)}
                       aria-label={`跳转到第 ${idx + 1} 步：${chapter.title}`}
-                      className={`absolute top-6 -left-[29px] flex h-3.5 w-3.5 items-center justify-center rounded-full border transition-all duration-200 sm:-left-[37px] ${
+                      data-testid={`timeline-dot-${idx}`}
+                      className={`absolute top-6 -left-[31px] flex h-3.5 w-3.5 items-center justify-center rounded-full border transition-all duration-200 sm:-left-[39px] ${
                         isActive
                           ? 'scale-110 border-indigo-600 bg-indigo-600 dark:border-indigo-400 dark:bg-indigo-400'
                           : 'border-slate-300 bg-[#FAFAFC] hover:border-indigo-500 dark:border-slate-700 dark:bg-[#08090E]'
