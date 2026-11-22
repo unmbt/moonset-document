@@ -283,6 +283,16 @@
   color: var(--shiki-dark, inherit);
 }
 
+/* Subtle architectural dot grid for interactive Mermaid viewer canvas */
+.moonset-mermaid-stage {
+  background-image: radial-gradient(rgba(15, 23, 42, 0.08) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+.dark .moonset-mermaid-stage {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.075) 1px, transparent 1px);
+}
+
 /* Xterm custom polish */
 .moonset-xterm .xterm {
   padding: 0.25rem 0;

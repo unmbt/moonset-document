@@ -36,6 +36,15 @@ import {
   highlightCodeLines,
   normalizeCodeLanguage,
 } from './highlight';
+import {
+  INITIAL_PAN_ZOOM_STATE,
+  applyPanDelta,
+  clampScale,
+  computePinchSnapshot,
+  computeWheelZoomScale,
+  stepPinchTransform,
+  zoomAtPoint,
+} from './panZoom';
 
 test('theme defaults to system and toggles with immediate visual change', () => {
   assert.equal(parseStoredTheme(null), 'system');
@@ -286,4 +295,39 @@ test('shiki highlighter normalizes aliases and produces dual-theme syntax tokens
   assert.equal(plain.language, null);
   assert.equal(plain.lines.length, 2);
   assert.equal(plain.lines[0][0].content, 'hello');
+});
+
+test('pan-zoom gesture math anchors focal point on wheel zoom and supports two-finger pinch + pan', () => {
+  assert.equal(clampScale(0.05), 0.4);
+  assert.equal(clampScale(20), 6);
+
+  // Wheel up zooms in, wheel down zooms out
+  assert.ok(computeWheelZoomScale(1, -120) > 1);
+  assert.ok(computeWheelZoomScale(1, 120) < 1);
+
+  // Cursor-anchored zoom keeps the content point under the pointer stationary
+  const center = { x: 500, y: 400 };
+  const focal = { x: 700, y: 500 }; // (+200, +100) from center
+  const zoomed = zoomAtPoint(INITIAL_PAN_ZOOM_STATE, 2, focal, center);
+  assert.equal(zoomed.scale, 2);
+  assert.equal(zoomed.x, -200);
+  assert.equal(zoomed.y, -100);
+
+  // Dragging adds pan delta cleanly
+  const panned = applyPanDelta(zoomed, 35, -20);
+  assert.equal(panned.x, -165);
+  assert.equal(panned.y, -120);
+
+  // Two-finger pinch doubling finger distance doubles scale and tracks midpoint shift
+  const startPinch = computePinchSnapshot({ x: 450, y: 400 }, { x: 550, y: 400 });
+  const endPinch = computePinchSnapshot({ x: 420, y: 430 }, { x: 620, y: 430 });
+  assert.equal(startPinch.distance, 100);
+  assert.deepEqual(startPinch.midpoint, { x: 500, y: 400 });
+  assert.equal(endPinch.distance, 200);
+  assert.deepEqual(endPinch.midpoint, { x: 520, y: 430 });
+
+  const pinched = stepPinchTransform(INITIAL_PAN_ZOOM_STATE, startPinch, endPinch, center);
+  assert.equal(pinched.scale, 2);
+  assert.equal(pinched.x, 20);
+  assert.equal(pinched.y, 30);
 });

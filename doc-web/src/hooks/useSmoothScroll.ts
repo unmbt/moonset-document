@@ -93,6 +93,11 @@ export function useSmoothScroll() {
     };
 
     const onWheel = (e: WheelEvent) => {
+      // Pause smooth page scrolling while an interactive modal/lightbox is open
+      if (document.documentElement.dataset.smoothScrollLock === 'true') {
+        return;
+      }
+
       // Allow pinch-to-zoom and dominant horizontal scrolling natively
       if (e.ctrlKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
         return;

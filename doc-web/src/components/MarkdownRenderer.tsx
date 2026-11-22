@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import { Check, Copy } from 'lucide-react';
 import { rehypeHeadingIds, resolveRelativeDocSlug } from '../lib/markdown';
 import { highlightCodeLines } from '../lib/highlight';
+import { MermaidDiagram } from './MermaidDiagram';
 
 interface MarkdownRendererProps {
   content: string;
@@ -52,10 +53,15 @@ function CodeBlock({
   const langMatch = /language-([\w+-]+)/.exec(className ?? '');
   const lang = langMatch ? langMatch[1] : '';
 
+  const isMermaid = lang.toLowerCase() === 'mermaid';
   const highlighted = useMemo(
-    () => highlightCodeLines(rawCode, lang),
-    [rawCode, lang],
+    () => (isMermaid ? null : highlightCodeLines(rawCode, lang)),
+    [isMermaid, rawCode, lang],
   );
+
+  if (isMermaid || !highlighted) {
+    return <MermaidDiagram source={rawCode} />;
+  }
 
   const handleCopy = async () => {
     try {
