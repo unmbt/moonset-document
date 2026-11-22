@@ -7,9 +7,17 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
 
+function resolveBasePath(): string {
+  const raw = process.env.VITE_BASE_PATH;
+  if (raw === undefined) return './';
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed === '/') return '/';
+  return trimmed.endsWith('/') ? trimmed : `${trimmed}/`;
+}
+
 export default defineConfig({
   root: __dirname,
-  base: process.env.VITE_BASE_PATH ?? './',
+  base: resolveBasePath(),
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
