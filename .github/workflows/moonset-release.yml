@@ -1,0 +1,139 @@
+name: Release moonset
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: moonset-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    concurrency:
+      group: moonset-publish
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    outputs:
+      published: ${{ steps.release.outputs.published }}
+      tags: ${{ steps.release.outputs.tags }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Check for pending release state
+        id: check-state
+        shell: bash
+        run: |
+          if [ -f .moonset/release-state.json ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: hustcer/setup-moonbit@v1
+        if: steps.check-state.outputs.present == 'true'
+        with:
+          version: '0.10.20+65efd5b93'
+          core-version: '0.10.20+65efd5b93'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - if: steps.check-state.outputs.present == 'true'
+        run: moon update
+      - if: steps.check-state.outputs.present == 'true'
+        run: moon check --target native --deny-warn
+      - if: steps.check-state.outputs.present == 'true'
+        run: moon build --target native --release
+      - name: Stage trusted moonset CLI binary
+        if: steps.check-state.outputs.present == 'true'
+        shell: bash
+        env:
+          CLI_OUT: ${{ runner.temp }}/moonset-cli
+        run: |
+          set -euo pipefail
+          src="_build/native/release/build/cmd/moonset/moonset.exe"
+          if [ ! -f "$src" ]; then
+            src="_build/native/release/build/cmd/moonset/moonset"
+          fi
+          cp "$src" "$CLI_OUT"
+          chmod +x "$CLI_OUT"
+      - id: release
+        if: steps.check-state.outputs.present == 'true'
+        uses: ./
+        with:
+          mode: publish
+          binary-path: ${{ runner.temp }}/moonset-cli
+          mooncakes-credentials: ${{ secrets.MOONCAKES_CREDENTIALS }}
+      - name: Upload publish status artifact
+        if: always() && steps.check-state.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: moonset-publish-state
+          path: .moonset/publish-state.json
+          if-no-files-found: ignore
+
+  version-pr:
+    needs: publish
+    if: always() && needs.publish.result != 'cancelled'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      has-changesets: ${{ steps.release.outputs.has-changesets }}
+      pull-request-number: ${{ steps.release.outputs.pull-request-number }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: hustcer/setup-moonbit@v1
+        with:
+          version: '0.10.20+65efd5b93'
+          core-version: '0.10.20+65efd5b93'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: moon update
+      - run: moon check --target native --deny-warn
+      - run: moon build --target native --release
+      - name: Stage trusted moonset CLI binary
+        shell: bash
+        env:
+          CLI_OUT: ${{ runner.temp }}/moonset-cli
+        run: |
+          set -euo pipefail
+          src="_build/native/release/build/cmd/moonset/moonset.exe"
+          if [ ! -f "$src" ]; then
+            src="_build/native/release/build/cmd/moonset/moonset"
+          fi
+          cp "$src" "$CLI_OUT"
+          chmod +x "$CLI_OUT"
+      - id: release
+        uses: ./
+        with:
+          mode: version-pr
+          binary-path: ${{ runner.temp }}/moonset-cli
+      - name: Sync generated CLI version on release branch
+        if: steps.release.outputs.has-changesets == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          moon run scripts/gen-version.mbtx
+          if ! git diff --quiet -- cli/generated_version.mbt; then
+            git add cli/generated_version.mbt
+            git commit --amend --no-edit
+            git push -f origin HEAD
+          fi
+
+  release-binaries:
+    needs: publish
+    if: needs.publish.outputs.published == 'true' && needs.publish.outputs.tags != ''
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-binaries.yml
+    with:
+      tag: ${{ needs.publish.outputs.tags }}

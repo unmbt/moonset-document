@@ -1,0 +1,143 @@
+name: Release Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag name to publish assets for (defaults to GITHUB_REF_NAME)
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        description: Existing tag name to publish assets for
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            asset: moonset-linux-x64
+            ext: ''
+          - os: ubuntu-22.04-arm
+            asset: moonset-linux-arm64
+            ext: ''
+          - os: macos-15
+            asset: moonset-darwin-arm64
+            ext: ''
+          - os: windows-latest
+            asset: moonset-win32-x64.exe
+            ext: '.exe'
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: hustcer/setup-moonbit@v1
+        with:
+          version: '0.10.20+65efd5b93'
+          core-version: '0.10.20+65efd5b93'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: moon update
+      - run: moon check --target native --deny-warn
+      - run: moon build --target native --release
+      - name: Package and smoke-test binary
+        shell: bash
+        env:
+          ASSET_NAME: ${{ matrix.asset }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          src="_build/native/release/build/cmd/moonset/moonset.exe"
+          if [ ! -f "$src" ]; then
+            src="_build/native/release/build/cmd/moonset/moonset"
+          fi
+          cp "$src" "dist/$ASSET_NAME"
+          chmod +x "dist/$ASSET_NAME"
+          "./dist/$ASSET_NAME" --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  publish-release:
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          merge-multiple: true
+          path: dist
+      - name: Generate SHA256SUMS and upload release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-$REF_NAME}"
+          if [[ "$tag" != v* ]]; then
+            echo "Release tag must start with 'v', got: $tag" >&2
+            exit 1
+          fi
+          (cd dist && sha256sum moonset-* > SHA256SUMS && sha256sum -c SHA256SUMS)
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "$tmp_dir"' EXIT
+          notes_file="$tmp_dir/notes.md"
+          : > "$notes_file"
+          version="${tag#v}"
+          if gh api -H "Accept: application/vnd.github.raw+json" "repos/${GH_REPO}/contents/CHANGELOG.md?ref=${tag}" > "$tmp_dir/CHANGELOG.md" 2>/dev/null; then
+            chmod +x dist/moonset-linux-x64
+            ./dist/moonset-linux-x64 release-notes --version "$version" --file "$tmp_dir/CHANGELOG.md" > "$notes_file" || : > "$notes_file"
+          fi
+          extra_flags=()
+          if [[ "$version" == *-* ]]; then
+            extra_flags+=(--prerelease)
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/moonset-* dist/SHA256SUMS --clobber
+          elif [ -s "$notes_file" ]; then
+            gh release create "$tag" dist/moonset-* dist/SHA256SUMS --title "$tag" --notes-file "$notes_file" "${extra_flags[@]}"
+          else
+            gh release create "$tag" dist/moonset-* dist/SHA256SUMS --title "$tag" --generate-notes "${extra_flags[@]}"
+          fi
+          if [[ "$tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            major="${BASH_REMATCH[1]}"
+            float_tag="v${major}"
+            if [ "$major" -eq 0 ]; then
+              float_tag="v1"
+            fi
+            # Only advance floating tag when this release is the highest stable tag in its series
+            highest="$(gh release list -R "$GH_REPO" --exclude-drafts --exclude-pre-releases --limit 50 --json tagName --jq '[.[] | .tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))] | .[]' | tr -d '\r' | sort -V | tail -n 1 || true)"
+            if [ -z "$highest" ] || [ "$(printf '%s\n%s\n' "$highest" "$tag" | sort -V | tail -n 1)" = "$tag" ]; then
+              target_sha="$(gh api "repos/${GH_REPO}/git/ref/tags/${tag}" --jq '.object.sha' | tr -d '\r')"
+              ref_obj_type="$(gh api "repos/${GH_REPO}/git/ref/tags/${tag}" --jq '.object.type' | tr -d '\r')"
+              if [ "$ref_obj_type" = "tag" ]; then
+                target_sha="$(gh api "repos/${GH_REPO}/git/tags/${target_sha}" --jq '.object.sha' | tr -d '\r')"
+              fi
+              if gh api "repos/${GH_REPO}/git/ref/tags/${float_tag}" >/dev/null 2>&1; then
+                gh api -X PATCH "repos/${GH_REPO}/git/refs/tags/${float_tag}" -f "sha=${target_sha}" -F "force=true" >/dev/null
+              else
+                gh api -X POST "repos/${GH_REPO}/git/refs" -f "ref=refs/tags/${float_tag}" -f "sha=${target_sha}" >/dev/null
+              fi
+            fi
+          fi

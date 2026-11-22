@@ -1,0 +1,38 @@
+import {
+  "moonbitlang/core/json",
+  "unmbt/moonset/model",
+  "unmbt/moonset/engine",
+  "unmbt/moonset/workspace",
+  "unmbt/moonset/adapters",
+  "unmbt/moonset/changelog",
+  "unmbt/moonset/executor",
+  "moonbitlang/core/async/fs",
+  "moonbitlang/core/async/shell",
+  "moonbitlang/core/async/stdio",
+  "moonbitlang/core/encoding/utf8",
+  "moonbitlang/core/env",
+  "moonbitlang/core/path",
+}
+
+supported_targets = "native"
+
+options(
+  "allow-experimental-packages": [
+    "moonbitlang/core/async",
+    "moonbitlang/core/async/fs",
+    "moonbitlang/core/async/shell",
+    "moonbitlang/core/async/stdio",
+  ],
+  "native-stub": [ "tty_native.c" ],
+)
+
+rule(
+  name: "gen_version",
+  command: "moon run scripts/gen-version.mbtx $input $output",
+)
+
+dev_build(
+  rule: "gen_version",
+  input: "../moon.mod",
+  output: "generated_version.mbt",
+)

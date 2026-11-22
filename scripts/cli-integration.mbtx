@@ -1,0 +1,347 @@
+----
+import {
+  "moonbitlang/core/async",
+  "moonbitlang/core/async/fs",
+  "moonbitlang/core/async/shell",
+  "moonbitlang/core/env",
+  "moonbitlang/core/path",
+  "moonbitlang/core/json",
+}
+----
+async fn write(root : String, path : String, text : String) -> Unit {
+  let file = @path.Path(root).join(@path.Path(path)).to_string()
+  @fs.mkdir(@path.Path(file).dirname().to_string(), recursive=true, allow_exist=true)
+  @fs.write_text(file, text)
+}
+
+async fn git(root : String, args : Array[String]) -> String {
+  let result = @shell.Cmd("git", args, cwd=root).output()
+  if result.exit_code() != 0 { fail("git " + args.join(" ") + ": " + result.stderr()) }
+  result.stdout().trim().to_owned()
+}
+
+async fn invoke(binary : String, root : String, args : Array[String], expected : Int) -> Json {
+  let result = @shell.Cmd(binary, ["--cwd", root] + args).output()
+  guard result.exit_code() == expected else {
+    fail("Expected exit \{expected}, got \{result.exit_code()}: \{result.stderr()}\n\{result.stdout()}")
+  }
+  @json.parse(result.stdout())
+}
+
+async fn main {
+  @shell.Cmd("moon", ["build", "--target", "native", "--release"]).run()
+  let project = @env.current_dir().unwrap()
+  let artifact = @path.Path(project).join(@path.Path("_build/native/release/build/cmd/moonset/moonset")).to_string()
+  let binary = if @fs.exists(artifact + ".exe") { artifact + ".exe" } else { artifact }
+  let root = @fs.tmpdir(prefix="moonset-cli-")
+  defer { @fs.rmdir(root, recursive=true) catch { _ => () } }
+  ignore(git(root, ["init", "-b", "main"]))
+  ignore(git(root, ["config", "user.name", "Moonset Tests"]))
+  ignore(git(root, ["config", "user.email", "moonset@example.invalid"]))
+  let manifest = "name = \"acme/app\"\nversion = \"0.1.0\"\n"
+  write(root, "moon.mod", manifest)
+  write(root, ".changeset/config.json", "{}")
+  write(root, ".changeset/pending.md", "---\nacme/app: minor\n---\nExisting release")
+  ignore(git(root, ["add", "."]))
+  ignore(git(root, ["commit", "-m", "base"]))
+  let base = git(root, ["rev-parse", "HEAD"])
+  ignore(git(root, ["switch", "-c", "feature"]))
+  write(root, "src/main.mbt", "// feature")
+  ignore(git(root, ["add", "."]))
+  ignore(git(root, ["commit", "-m", "code without changeset"]))
+  let missing = invoke(binary, root, ["status", "--since", base, "--json"], 1)
+  assert_true(missing is { "errors": [{ "code": "missing-changeset", .. }], .. })
+  write(root, ".changeset/empty.md", "---\r\n---\r\nNo release required")
+  ignore(git(root, ["add", "."]))
+  ignore(git(root, ["commit", "-m", "empty changeset"]))
+  let passing = invoke(binary, root, ["status", "--since", base, "--output", "json"], 0)
+  assert_true(passing is { "hasRelease": False, "errors": [], "changesets": [{ "id": "empty", .. }], .. })
+  let json_output = @shell.Cmd(binary, ["--cwd", root, "status", "--since", base, "--json"]).output()
+  assert_true(!json_output.stdout().contains("\u{001b}["))
+  assert_true(!json_output.stderr().contains("\u{001b}["))
+  let previous_no_color = @env.get_env_var("NO_COLOR")
+  @env.set_env_var("NO_COLOR", "1")
+  let env_no_color = {
+    defer {
+      match previous_no_color {
+        Some(value) => @env.set_env_var("NO_COLOR", value)
+        None => @env.unset_env_var("NO_COLOR")
+      }
+    }
+    @shell.Cmd(binary, ["--cwd", root, "status", "--since", base]).output()
+  }
+  assert_true(!env_no_color.stdout().contains("\u{001b}["))
+  assert_true(!env_no_color.stderr().contains("\u{001b}["))
+  let flag_no_color = @shell.Cmd(binary, ["--cwd", root, "status", "--since", base, "--no-color"]).output()
+  assert_true(!flag_no_color.stdout().contains("\u{001b}["))
+  assert_true(!flag_no_color.stderr().contains("\u{001b}["))
+  ignore(git(root, ["mv", ".changeset/empty.md", ".changeset/renamed.md"]))
+  ignore(git(root, ["commit", "-m", "rename changeset"]))
+  ignore(git(root, ["switch", "main"]))
+  write(root, "base-only.txt", "unrelated base branch change")
+  ignore(git(root, ["add", "."]))
+  ignore(git(root, ["commit", "-m", "base diverges"]))
+  ignore(git(root, ["switch", "feature"]))
+  write(root, "moon.mod", "invalid dirty manifest")
+  let before = git(root, ["status", "--porcelain"])
+  let head = invoke(binary, root, ["status", "--since", "main", "--json"], 0)
+  assert_true(head is { "changesets": [{ "id": "renamed", .. }], "warnings": [{ "code": "uncommitted-excluded", .. }], .. })
+  assert_eq(git(root, ["status", "--porcelain"]), before)
+  let invalid_ref = invoke(binary, root, ["status", "--since", "missing-reference", "--json"], 3)
+  assert_true(invalid_ref is { "errors": [{ "code": "external-error", .. }], .. })
+  let invalid_input = invoke(binary, root, ["status", "--json"], 2)
+  assert_true(invalid_input is { "errors": [{ "path": "moon.mod", .. }], .. })
+  let output = @path.Path(root).join(@path.Path("plan.json")).to_string()
+  ignore(invoke(binary, root, ["publish-plan", "--output", output], 2))
+  assert_true(!@fs.exists(output))
+  write(root, "moon.mod", manifest)
+  let regular = invoke(binary, root, ["status", "--json"], 0)
+  assert_true(regular is { "releases": [{ "newVersion": "0.2.0", .. }], .. })
+  ignore(invoke(binary, root, ["publish-plan", "--output", "moon.mod"], 2))
+  ignore(invoke(binary, root, ["publish-plan", "--output", "src/main.mbt"], 2))
+  assert_eq(@fs.read_text(@path.Path(root).join(@path.Path("src/main.mbt")).to_string()), "// feature")
+  assert_eq(@fs.read_text(@path.Path(root).join(@path.Path("moon.mod")).to_string()), manifest)
+  let exported = @shell.Cmd(binary, ["--cwd", root, "publish-plan", "--output", output, "--pretty"]).output()
+  if exported.exit_code() != 0 { fail("export: " + exported.stdout() + exported.stderr()) }
+  assert_eq(exported.stdout(), "")
+  assert_true(@json.parse(@fs.read_text(output)) is { "stage": "analysis", "executable": False, "schemaVersion": 1, .. })
+  let replaced = @shell.Cmd(binary, ["--cwd", root, "publish-plan", "--output", output]).output()
+  if replaced.exit_code() != 0 { fail(replaced.stderr()) }
+  // Markdown PR Bot output: missing (exit 1), release (exit 0), and error (exit 2)
+  let md_root = @fs.tmpdir(prefix="moonset-md-")
+  defer { @fs.rmdir(md_root, recursive=true) catch { _ => () } }
+  ignore(git(md_root, ["init", "-b", "main"]))
+  ignore(git(md_root, ["config", "user.name", "Moonset Tests"]))
+  ignore(git(md_root, ["config", "user.email", "moonset@example.invalid"]))
+  write(md_root, "moon.mod", manifest)
+  write(md_root, ".changeset/config.json", "{}")
+  ignore(git(md_root, ["add", "."]))
+  ignore(git(md_root, ["commit", "-m", "base"]))
+  let md_base = git(md_root, ["rev-parse", "HEAD"])
+  ignore(git(md_root, ["switch", "-c", "feat/bot"]))
+  write(md_root, "lib.mbt", "pub fn x() -> Int { 1 }")
+  ignore(git(md_root, ["add", "."]))
+  ignore(git(md_root, ["commit", "-m", "code change"]))
+  let md_missing = @shell.Cmd(binary, ["--cwd", md_root, "status", "--since", md_base, "--output", "markdown", "--head-repo", "unmbt/moonset", "--head-ref", "feat/bot"]).output()
+  assert_eq(md_missing.exit_code(), 1)
+  assert_true(md_missing.stdout().has_prefix("<!-- moonset-bot:changeset-check -->\n"))
+  assert_true(md_missing.stdout().contains("### ⚠️ No changeset found"))
+  assert_true(md_missing.stdout().contains("moonset add"))
+  assert_true(!md_missing.stdout().contains("\u{001b}["))
+  write(md_root, ".changeset/bot.md", "---\nacme/app: minor\n---\nBot feature")
+  ignore(git(md_root, ["add", "."]))
+  ignore(git(md_root, ["commit", "-m", "add changeset"]))
+  let md_rel = @shell.Cmd(binary, ["--cwd", md_root, "status", "--since", md_base, "--output", "markdown"]).output()
+  assert_eq(md_rel.exit_code(), 0)
+  assert_true(md_rel.stdout().contains("### ✅ Changeset detected"))
+  assert_true(md_rel.stdout().contains("| `moonbit:acme/app` | `0.1.0` → `0.2.0` | `minor` |"))
+  write(md_root, ".changeset/bad.md", "---\nbad: [unclosed\n---\nBroken")
+  ignore(git(md_root, ["add", "."]))
+  ignore(git(md_root, ["commit", "-m", "broken changeset"]))
+  let md_err = @shell.Cmd(binary, ["--cwd", md_root, "status", "--since", md_base, "--output", "markdown"]).output()
+  assert_eq(md_err.exit_code(), 2)
+  assert_true(md_err.stdout().has_prefix("<!-- moonset-bot:changeset-check -->\n"))
+  assert_true(md_err.stdout().contains("### ❌ Failed to inspect changesets"))
+  let first = invoke(binary, root, ["publish-plan"], 0)
+  let second = invoke(binary, root, ["publish-plan"], 0)
+  assert_eq(first, second)
+  let generator_config : Json = {
+    "changelog": { "generator": "fixture" },
+    "plugins": {
+      "generators": {
+        "fixture": {
+          "program": "node",
+          "args": [@path.Path(project).join(@path.Path("fixtures/phase5-plugin.mjs")).to_string(), "success"],
+          "allowedPrograms": ["node"],
+          "environment": ["PATH", "SystemRoot"],
+          "timeoutMs": 30000,
+          "maxOutputBytes": 1048576,
+        },
+      },
+    },
+  }
+  write(root, ".changeset/config.json", generator_config.stringify())
+  let manifest_before = @fs.read_text(@path.Path(root).join(@path.Path("moon.mod")).to_string())
+  let generated = invoke(binary, root, ["version", "--dry-run", "--json"], 0)
+  assert_true(generated is {
+    "changelogs": [{
+      "generator": "fixture",
+      "metadata": { "fixture": True, .. },
+      "text": "phase5-fixture",
+      ..
+    }, ..],
+    "fingerprint": String(_),
+    ..
+  })
+  assert_eq(
+    @fs.read_text(@path.Path(root).join(@path.Path("moon.mod")).to_string()),
+    manifest_before,
+  )
+  assert_true(!@fs.exists(@path.Path(root).join(@path.Path(".moonset/release-state.json")).to_string()))
+  let failing_config = generator_config.stringify().replace_all(old="\"success\"", new="\"crash\"")
+  write(root, ".changeset/config.json", failing_config)
+  let rejected = invoke(binary, root, ["version", "--json"], 2)
+  assert_true(rejected is { "errors": [{ "code": "plugin-crashed", .. }, ..], .. })
+  assert_eq(
+    @fs.read_text(@path.Path(root).join(@path.Path("moon.mod")).to_string()),
+    manifest_before,
+  )
+  assert_true(!@fs.exists(@path.Path(root).join(@path.Path(".moonset/release-state.json")).to_string()))
+
+  // Full lifecycle integration: init -> add -> pre enter -> version -> pre exit -> version -> commit -> tag -> doctor
+  let workflow_root = @fs.tmpdir(prefix="moonset-lifecycle-")
+  defer { @fs.rmdir(workflow_root, recursive=true) catch { _ => () } }
+  ignore(git(workflow_root, ["init", "-b", "main"]))
+  ignore(git(workflow_root, ["config", "user.name", "Moonset Tests"]))
+  ignore(git(workflow_root, ["config", "user.email", "moonset@example.invalid"]))
+  write(workflow_root, "moon.mod", "name = \"acme/flow\"\nversion = \"0.1.0\"\n")
+  let init_res = invoke(binary, workflow_root, ["init", "--json"], 0)
+  assert_true(init_res is { "created": [_, ..], .. })
+  let init_again = invoke(binary, workflow_root, ["init", "--json"], 0)
+  assert_true(init_again is { "created": [], "skipped": [_, ..], .. })
+  // Unknown package in add must fail
+  ignore(invoke(binary, workflow_root, ["add", "--package", "acme/missing", "--type", "patch", "--summary", "bad", "--json"], 2))
+  let added = invoke(binary, workflow_root, ["add", "--package", "acme/flow", "--type", "minor", "--summary", "Flow feature", "--id", "flow-feat", "--json"], 0)
+  assert_true(added is { "id": "flow-feat", .. })
+  let pre_enter = invoke(binary, workflow_root, ["pre", "enter", "alpha", "--json"], 0)
+  assert_true(pre_enter is { "mode": "pre", "tag": "alpha", .. })
+  // Duplicate pre enter must fail
+  ignore(invoke(binary, workflow_root, ["pre", "enter", "beta", "--json"], 2))
+  let v_pre = invoke(binary, workflow_root, ["version", "--json"], 0)
+  assert_true(v_pre is { "analysis": { "releases": [{ "newVersion": "0.2.0-alpha.0", .. }], .. }, .. })
+  assert_true(!@fs.exists(@path.Path(workflow_root).join(@path.Path(".changeset/flow-feat.md")).to_string()))
+  assert_true(@fs.exists(@path.Path(workflow_root).join(@path.Path(".changeset/pre/flow-feat.md")).to_string()))
+  let pre_exit = invoke(binary, workflow_root, ["pre", "exit", "--json"], 0)
+  assert_true(pre_exit is { "mode": "exit", "tag": "alpha", .. })
+  let v_grad = invoke(binary, workflow_root, ["version", "--json"], 0)
+  assert_true(v_grad is { "analysis": { "releases": [{ "newVersion": "0.2.0", .. }], .. }, .. })
+  assert_true(!@fs.exists(@path.Path(workflow_root).join(@path.Path(".changeset/pre.json")).to_string()))
+  assert_true(!@fs.exists(@path.Path(workflow_root).join(@path.Path(".changeset/pre/flow-feat.md")).to_string()))
+  ignore(git(workflow_root, ["add", "."]))
+  ignore(git(workflow_root, ["commit", "-m", "chore: release 0.2.0"]))
+  let tagged = invoke(binary, workflow_root, ["tag", "--json"], 0)
+  assert_true(tagged is { "created": ["v0.2.0"], "skipped": [], .. })
+  let tagged_again = invoke(binary, workflow_root, ["tag", "--json"], 0)
+  assert_true(tagged_again is { "created": [], "skipped": ["v0.2.0"], .. })
+  let doc = invoke(binary, workflow_root, ["doctor", "--output", "json"], 0)
+  assert_true(doc is { "ok": True, .. })
+
+  // Verify non-status command JSON error envelope, exit code 1 for policy gate, doctor --fix, and commit.mode
+  let pub_no_yes = invoke(binary, workflow_root, ["publish", "--json"], 1)
+  assert_true(pub_no_yes is { "ok": False, "command": "publish", "errors": [{ "code": "confirmation-required", .. }], .. })
+
+  let fix_root = @fs.tmpdir(prefix="moonset-docfix-")
+  defer { @fs.rmdir(fix_root, recursive=true) catch { _ => () } }
+  ignore(git(fix_root, ["init", "-b", "main"]))
+  ignore(git(fix_root, ["config", "user.name", "Moonset Tests"]))
+  ignore(git(fix_root, ["config", "user.email", "moonset@example.invalid"]))
+  write(fix_root, "moon.mod", "name = \"acme/fix\"\nversion = \"0.1.0\"\n")
+  let doc_fix = invoke(binary, fix_root, ["doctor", "--fix", "--json"], 1)
+  assert_true(doc_fix is { "checks": [{ "name": "fix", "ok": True, .. }, ..], .. })
+  assert_true(@fs.exists(@path.Path(fix_root).join(@path.Path(".changeset/config.json")).to_string()))
+  write(fix_root, ".changeset/config.json", "{\"schemaVersion\":1,\"commit\":{\"mode\":\"both\",\"addMessage\":\"chore: add cs\",\"versionMessage\":\"chore: rel\"}}")
+  ignore(git(fix_root, ["add", "."]))
+  ignore(git(fix_root, ["commit", "-m", "init"]))
+  ignore(invoke(binary, fix_root, ["add", "--package", "acme/fix", "--type", "patch", "--summary", "Auto committed fix", "--id", "auto-1", "--json"], 0))
+  assert_eq(git(fix_root, ["log", "-n", "1", "--format=%s"]), "chore: add cs")
+  ignore(invoke(binary, fix_root, ["version", "--json"], 0))
+  assert_eq(git(fix_root, ["log", "-n", "1", "--format=%s"]), "chore: rel")
+
+  // release-notes extraction (single --version & --from-state) and artifact DAG publish-plan / pack --verify
+  let rn_single = invoke(binary, workflow_root, ["release-notes", "--version", "0.2.0", "--json"], 0)
+  assert_true(rn_single is { "found": True, "version": "0.2.0", "prerelease": False, "body": String(rn_body), .. } && rn_body.contains("Flow feature"))
+  let rn_missing = invoke(binary, workflow_root, ["release-notes", "--version", "9.9.9", "--json"], 0)
+  assert_true(rn_missing is { "found": False, "body": "", .. })
+  let rn_state = invoke(binary, workflow_root, ["release-notes", "--from-state", "--json"], 0)
+  assert_true(rn_state is { "notes": [{ "tag": "v0.2.0", "found": True, .. }], .. })
+
+  let dag_root = @fs.tmpdir(prefix="moonset-dag-")
+  defer { @fs.rmdir(dag_root, recursive=true) catch { _ => () } }
+  ignore(git(dag_root, ["init", "-b", "main"]))
+  ignore(git(dag_root, ["config", "user.name", "Moonset Tests"]))
+  ignore(git(dag_root, ["config", "user.email", "moonset@example.invalid"]))
+  write(dag_root, "moon.mod", "name = \"acme/cli\"\nversion = \"0.1.0\"\n")
+  write(dag_root, "dist/cli-linux-x64", "binary-bytes")
+  write(dag_root, ".changeset/config.json", "{\"schemaVersion\":1,\"experimental\":{\"mixedWorkspaces\":{\"mode\":\"unified\",\"workspaces\":[{\"id\":\"m\",\"ecosystem\":\"moonbit\",\"root\":\".\",\"manager\":\"moon\",\"includeRoot\":true}],\"units\":{\"moonbit:acme/cli\":{\"artifacts\":[{\"target\":\"linux-x64\",\"required\":true,\"path\":\"dist/cli-linux-x64\"}]}}}}}")
+  write(dag_root, ".changeset/c1.md", "---\n\"moonbit:acme/cli\": patch\n---\nAdd linux binary\n")
+  let dag_plan = invoke(binary, dag_root, ["publish-plan"], 0)
+  assert_true(dag_plan is { "artifacts": [{ "target": "linux-x64", "required": True, .. }], "executionGraph": { "buildNodes": [_, ..], "publishNodes": [_, ..], .. }, .. })
+  ignore(invoke(binary, dag_root, ["version", "--json"], 0))
+  let packed_linux = invoke(binary, dag_root, ["pack", "--target", "linux-x64", "--json"], 0)
+  assert_true(packed_linux is { "target": "linux-x64", "results": [{ "target": "linux-x64", "verified": True, .. }], .. })
+  let verified_ok = invoke(binary, dag_root, ["pack", "--verify", "--json"], 0)
+  assert_true(verified_ok is { "ok": True, "checked": 1, .. })
+
+  let meta_root = @fs.tmpdir(prefix="moonset-prbody-")
+  defer { @fs.rmdir(meta_root, recursive=true) catch { _ => () } }
+  ignore(git(meta_root, ["init", "-b", "main"]))
+  ignore(git(meta_root, ["config", "user.name", "Moonset Tests"]))
+  ignore(git(meta_root, ["config", "user.email", "moonset@example.invalid"]))
+  write(meta_root, "moon.mod", "name = \"acme/prbody\"\nversion = \"0.1.0\"\n")
+  write(meta_root, ".changeset/config.json", "{\"schemaVersion\":1,\"baseBranch\":\"main\",\"changelog\":{\"generator\":\"github\",\"options\":{\"repo\":\"acme/prbody\"}}}")
+  write(meta_root, ".changeset/f1.md", "---\n\"acme/prbody\": minor\n---\nAdd rich PR body (#9)\n")
+  ignore(git(meta_root, ["add", "."]))
+  ignore(git(meta_root, ["commit", "-m", "feat: add pr body"]))
+  let head_sha = git(meta_root, ["rev-parse", "HEAD"])
+  write(meta_root, "meta.json", "{\"" + head_sha + "\":{\"pr\":\"42\",\"author\":\"alice\"}}")
+  let pr_md_out = @shell.Cmd(binary, [
+    "--cwd", meta_root, "version", "--dry-run", "--output", "markdown", "--commit-metadata", "meta.json",
+  ]).output()
+  assert_eq(pr_md_out.exit_code(), 0)
+  let pr_md = pr_md_out.stdout()
+  assert_true(pr_md.contains("# Releases"))
+  assert_true(pr_md.contains("## acme/prbody@0.2.0"))
+  assert_true(pr_md.contains("https://github.com/acme/prbody/pull/42"))
+  assert_true(pr_md.contains("Thanks [@alice](https://github.com/alice)!"))
+
+  // FR-026/028/029 CLI end-to-end: snapshot gate + template, pre.directory isolation, and --no-format
+  let v020_root = @fs.tmpdir(prefix="moonset-v020-")
+  defer { @fs.rmdir(v020_root, recursive=true) catch { _ => () } }
+  write(v020_root, "moon.mod", "name = \"acme/v020\"\nversion = \"0.1.0\"\n")
+  write(v020_root, ".changeset/config.json", "{\"schemaVersion\":1,\"formatter\":\"prettier\",\"snapshot\":{\"enabled\":false}}")
+  // --no-format allows add even when prettier is not invoked
+  ignore(invoke(binary, v020_root, ["add", "--package", "acme/v020", "--type", "minor", "--summary", "V020 feature", "--id", "v020-c1", "--no-format", "--json"], 0))
+  // snapshot.enabled=false must reject version --snapshot
+  let snap_err = invoke(binary, v020_root, ["version", "--snapshot", "canary", "--dry-run", "--json"], 2)
+  assert_true(snap_err is { "ok": False, "errors": [{ "code": "snapshot-disabled", .. }], .. })
+  // Enable snapshot with useCalculatedVersion=true and verify apply keeps changeset intact and marks release-state isSnapshot=true
+  write(v020_root, ".changeset/config.json", "{\"schemaVersion\":1,\"formatter\":\"prettier\",\"snapshot\":{\"enabled\":true,\"useCalculatedVersion\":true,\"prereleaseTemplate\":\"{tag}-{datetime}\"}}")
+  let snap_plan = invoke(binary, v020_root, ["version", "--snapshot=canary", "--no-format", "--json"], 0)
+  assert_true(snap_plan is { "consumedChangesets": [], "tags": [], "analysis": { "isSnapshot": True, "releases": [{ "newVersion": String(sv), .. }], .. }, .. } && sv.has_prefix("0.2.0-canary-"))
+  assert_true(@fs.exists(@path.Path(v020_root).join(@path.Path(".changeset/v020-c1.md")).to_string()))
+  let snap_state = @json.parse(@fs.read_text(@path.Path(v020_root).join(@path.Path(".moonset/release-state.json")).to_string()))
+  assert_true(snap_state is { "isSnapshot": True, .. })
+  // Tagless `--snapshot` works with default config (`snapshot.enabled` defaults to true)
+  write(v020_root, "moon.mod", "name = \"acme/v020\"\nversion = \"0.1.0\"\n")
+  write(v020_root, ".changeset/config.json", "{\"schemaVersion\":1}")
+  let tagless_snap = invoke(binary, v020_root, ["version", "--snapshot", "--dry-run", "--json"], 0)
+  assert_true(tagless_snap is { "analysis": { "isSnapshot": True, "releases": [{ "newVersion": String(tv), .. }], .. }, .. } && tv.has_prefix("0.0.0-"))
+  // Reset version and test pre.directory isolation end-to-end
+  write(v020_root, "moon.mod", "name = \"acme/v020\"\nversion = \"0.1.0\"\n")
+  write(v020_root, ".changeset/config.json", "{\"schemaVersion\":1,\"pre\":{\"file\":\".changeset/pre.json\",\"directory\":\".changeset/pre\"}}")
+  ignore(invoke(binary, v020_root, ["pre", "enter", "alpha", "--json"], 0))
+  ignore(invoke(binary, v020_root, ["version", "--json"], 0))
+  assert_true(!@fs.exists(@path.Path(v020_root).join(@path.Path(".changeset/v020-c1.md")).to_string()))
+  assert_true(@fs.exists(@path.Path(v020_root).join(@path.Path(".changeset/pre/v020-c1.md")).to_string()))
+  ignore(invoke(binary, v020_root, ["pre", "exit", "--json"], 0))
+  ignore(invoke(binary, v020_root, ["version", "--json"], 0))
+  assert_true(!@fs.exists(@path.Path(v020_root).join(@path.Path(".changeset/pre/v020-c1.md")).to_string()))
+  assert_true(!@fs.exists(@path.Path(v020_root).join(@path.Path(".changeset/pre.json")).to_string()))
+  assert_true(@fs.read_text(@path.Path(v020_root).join(@path.Path("moon.mod")).to_string()).contains("0.2.0"))
+
+  // v0.3.0 security & UX checks: --id traversal blocked, --ignore, init omits pre.json gitignore, mixed npm+Cargo e2e
+  let v030_root = @fs.tmpdir(prefix="moonset-v030-")
+  defer { @fs.rmdir(v030_root, recursive=true) catch { _ => () } }
+  write(v030_root, "moon.mod", "name = \"acme/v030\"\nversion = \"0.1.0\"\n")
+  ignore(invoke(binary, v030_root, ["init", "--json"], 0))
+  assert_true(!@fs.exists(@path.Path(v030_root).join(@path.Path(".changeset/.gitignore")).to_string()))
+  assert_true(@fs.read_text(@path.Path(v030_root).join(@path.Path(".moonset/.gitignore")).to_string()).contains("pack-results-*.json"))
+  ignore(invoke(binary, v030_root, ["add", "--package=acme/v030", "--patch", "--summary=bad", "--id=../evil", "--json"], 2))
+  let auto_added = invoke(binary, v030_root, ["add", "--package=acme/v030", "--patch", "--summary=auto human id", "--json"], 0)
+  assert_true(auto_added is { "id": String(auto_id), .. } && !auto_id.has_prefix("change-") && auto_id.split("-").count() == 3)
+  ignore(invoke(binary, v030_root, ["add", "--package=acme/v030", "--major", "--summary=v030 major", "--id=v030-maj", "--json"], 0))
+  let ignored_ver = invoke(binary, v030_root, ["version", "--ignore=acme/v030", "--dry-run", "--json"], 0)
+  assert_true(ignored_ver is { "analysis": { "releases": [], .. }, .. })
+
+  println("CLI integration (release binary): Git snapshots, merge-base, rename, empty changesets, release-notes, release PR body, artifact DAG, v0.3.0 pre/snapshot/ignore/id-security, lifecycle, exits, JSON and no-write checks passed")
+}

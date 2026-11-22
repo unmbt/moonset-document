@@ -1,0 +1,24 @@
+import {
+  "unmbt/moonset/model",
+  "unmbt/moonset/engine",
+  "unmbt/moon-manifest" @manifest,
+  "moonbitlang/core/async/fs",
+  "moonbitlang/core/async/shell",
+  "moonbitlang/core/json",
+  "moonbitlang/core/path",
+  "moonbitlang/core/encoding/utf8",
+}
+
+supported_targets = "native"
+
+options(
+  "allow-experimental-packages": [
+    "moonbitlang/core/async",
+    "moonbitlang/core/async/fs",
+    "moonbitlang/core/async/shell",
+  ],
+)
+
+import {
+  "moonbitlang/core/async",
+} for "test"

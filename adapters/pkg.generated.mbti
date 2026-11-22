@@ -1,0 +1,103 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "unmbt/moonset/adapters"
+
+import {
+  "moonbitlang/core/debug",
+  "moonbitlang/core/json",
+  "unmbt/moonset/model",
+}
+
+// Values
+pub fn generator_result(JsonlResponse) -> (String, @json.Json) raise @model.MoonsetError
+
+pub fn parse_request(@json.Json) -> JsonlRequest raise @model.MoonsetError
+
+pub fn parse_response(@json.Json) -> JsonlResponse raise @model.MoonsetError
+
+pub fn require_capability(CapabilityReport, Capability) -> Unit raise @model.MoonsetError
+
+pub async fn run_jsonl(PluginSpec, JsonlRequest, host_allowed_programs? : Array[String]) -> JsonlResponse raise @model.MoonsetError
+
+pub fn validate_conformance(CapabilityReport) -> Unit raise @model.MoonsetError
+
+// Errors
+
+// Types and methods
+pub(all) struct AdapterRegistry {
+  adapters : Map[String, CapabilityReport]
+}
+pub fn AdapterRegistry::require(Self, @model.Ecosystem, Capability) -> Unit raise @model.MoonsetError
+pub fn AdapterRegistry::require_named(Self, String, Capability) -> Unit raise @model.MoonsetError
+pub fn AdapterRegistry::with_builtins() -> Self
+
+#derive(Eq, @debug.Debug)
+pub(all) enum Capability {
+  Discovery
+  Range
+  Ownership
+  Lockfile
+  Artifact
+  Publish
+}
+pub fn Capability::equal(Self, Self) -> Bool
+pub fn Capability::not_equal(Self, Self) -> Bool
+pub fn Capability::text(Self) -> String
+pub fn Capability::to_repr(Self) -> @debug.Repr
+
+pub(all) struct CapabilityReport {
+  adapter : String
+  supported : Array[Capability]
+}
+
+pub(all) struct JsonlRequest {
+  schema_version : Int32
+  protocol_method : String
+  payload : @json.Json
+}
+pub fn JsonlRequest::to_json(Self) -> @json.Json
+
+pub(all) struct JsonlResponse {
+  ok : Bool
+  result : @json.Json
+  error : String?
+}
+pub fn JsonlResponse::to_json(Self) -> @json.Json
+
+pub(all) struct PluginSpec {
+  program : String
+  args : Array[String]
+  cwd : String?
+  timeout_ms : Int32
+  max_output_bytes : Int32
+  allowed_programs : Array[String]
+  environment : Map[String, String]
+}
+
+pub(all) struct ProcessResult {
+  exit_code : Int32
+  stdout : String
+  stderr : String
+}
+
+pub(all) struct PublisherRegistry {
+  plugins : Map[String, PluginSpec]
+  allowed_programs : Array[String]
+}
+pub async fn PublisherRegistry::execute(Self, String, String, @json.Json) -> @json.Json raise @model.MoonsetError
+pub fn PublisherRegistry::new(allowed_programs? : Array[String]) -> Self
+pub fn PublisherRegistry::register(Self, String, PluginSpec) -> Unit
+
+pub(all) struct RegistryHost {
+  already_published : (String, String, String) -> Bool raise @model.MoonsetError
+  preflight : (String, String, String) -> Unit raise @model.MoonsetError
+  publish : (String, String, String) -> String raise @model.MoonsetError
+}
+
+// Type aliases
+
+// Traits
+pub(open) trait PublisherPort {
+  fn already_published(Self, @model.PublishTarget) -> Bool raise @model.MoonsetError
+  fn preflight(Self, @model.PublishTarget) -> Unit raise @model.MoonsetError
+  fn publish(Self, @model.PublishTarget) -> String raise @model.MoonsetError
+}

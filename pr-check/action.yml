@@ -1,0 +1,183 @@
+name: moonset PR Check
+description: Read-only PR changeset inspection producing Markdown comment and status outputs.
+inputs:
+  base-sha:
+    description: Base commit SHA for merge-base diff comparison
+    required: true
+  head-repo:
+    description: Head repository full name (owner/repo) for quick-add links
+    required: false
+    default: ''
+  head-ref:
+    description: Head branch name for quick-add links
+    required: false
+    default: ''
+  working-directory:
+    description: Workspace root relative to GITHUB_WORKSPACE
+    required: false
+    default: '.'
+  version:
+    description: moonset release tag to download
+    required: false
+    default: ''
+  binary-path:
+    description: Optional trusted local moonset binary path
+    required: false
+    default: ''
+  comment-on-no-changes:
+    description: Whether a comment should be created when no managed unit changed ('true' or 'false')
+    required: false
+    default: 'true'
+  github-token:
+    description: GitHub token used to download release assets
+    required: false
+    default: ${{ github.token }}
+outputs:
+  comment:
+    description: Rendered Markdown comment body
+    value: ${{ steps.inspect.outputs.comment }}
+  state:
+    description: Check state (release, missing, empty, none, or error)
+    value: ${{ steps.inspect.outputs.state }}
+  exit-code:
+    description: Raw exit code returned by moonset status
+    value: ${{ steps.inspect.outputs.exit-code }}
+  should-comment:
+    description: Whether pr-comment should create a new comment if none exists yet
+    value: ${{ steps.inspect.outputs.should-comment }}
+  audit-event:
+    description: Sanitized compact JSON audit event
+    value: ${{ steps.inspect.outputs.audit-event }}
+runs:
+  using: composite
+  steps:
+    - id: setup
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_BINARY_PATH: ${{ inputs.binary-path }}
+        ACTION_REF: ${{ github.action_ref }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        GITHUB_ACTION_REPOSITORY: ${{ github.action_repository || 'unmbt/moonset' }}
+      run: |
+        bash "${{ github.action_path }}/../setup/install.sh"
+
+    - id: inspect
+      shell: bash
+      env:
+        MOONSET_BIN: ${{ steps.setup.outputs.path }}
+        BASE_SHA: ${{ inputs.base-sha }}
+        HEAD_REPO: ${{ inputs.head-repo }}
+        HEAD_REF: ${{ inputs.head-ref }}
+        WORK_DIR: ${{ inputs.working-directory }}
+        COMMENT_ON_NO_CHANGES: ${{ inputs.comment-on-no-changes }}
+        REPO: ${{ github.repository }}
+        RUN_ID: ${{ github.run_id }}
+        RUN_ATTEMPT: ${{ github.run_attempt }}
+      run: |
+        set -euo pipefail
+        now_ms() {
+          local raw
+          raw="$(date +%s%3N 2>/dev/null || true)"
+          case "$raw" in
+            ''|*[!0-9]*)
+              printf '%s000' "$(date +%s)"
+              ;;
+            *)
+              if [ "${#raw}" -ge 13 ]; then
+                printf '%s' "$raw"
+              else
+                printf '%s000' "$(date +%s)"
+              fi
+              ;;
+          esac
+        }
+        start_ms="$(now_ms)"
+        tmp_dir="$(mktemp -d)"
+        trap 'rm -rf "$tmp_dir"' EXIT
+
+        md_args=(--cwd "$WORK_DIR" status --since "$BASE_SHA" --output markdown)
+        if [ -n "$HEAD_REPO" ]; then
+          md_args+=(--head-repo "$HEAD_REPO")
+        fi
+        if [ -n "$HEAD_REF" ]; then
+          md_args+=(--head-ref "$HEAD_REF")
+        fi
+
+        set +e
+        "$MOONSET_BIN" "${md_args[@]}" > "$tmp_dir/comment.md"
+        exit_code=$?
+        "$MOONSET_BIN" --cwd "$WORK_DIR" status --since "$BASE_SHA" --output json > "$tmp_dir/status.json"
+        json_code=$?
+        set -e
+
+        err_code=""
+        plan_fp=""
+        if [ -s "$tmp_dir/status.json" ]; then
+          plan_fp="$(jq -r '.planFingerprint // .fingerprint // empty' "$tmp_dir/status.json" 2>/dev/null | tr -d '\r' || true)"
+          err_code="$(jq -r '.errors[0].code // empty' "$tmp_dir/status.json" 2>/dev/null | tr -d '\r' || true)"
+        fi
+
+        if [ "$exit_code" -eq 0 ]; then
+          if [ "$json_code" -eq 0 ]; then
+            has_release="$(jq -r '.hasRelease // false' "$tmp_dir/status.json" | tr -d '\r')"
+            cs_count="$(jq -r '.changesets | length' "$tmp_dir/status.json" | tr -d '\r')"
+            if [ "$has_release" = "true" ]; then
+              state="release"
+            elif [ "$cs_count" -gt 0 ]; then
+              state="empty"
+            else
+              state="none"
+            fi
+          else
+            state="error"
+          fi
+        elif [ "$exit_code" -eq 1 ]; then
+          state="missing"
+          if [ -z "$err_code" ]; then err_code="missing-changeset"; fi
+        else
+          state="error"
+          if [ -z "$err_code" ]; then err_code="status-failed"; fi
+        fi
+
+        if [ "$state" = "none" ] && [ "$COMMENT_ON_NO_CHANGES" != "true" ]; then
+          should_comment="false"
+        else
+          should_comment="true"
+        fi
+
+        end_ms="$(now_ms)"
+        duration=$((end_ms - start_ms))
+        if [ "$duration" -lt 0 ]; then duration=0; fi
+        audit_json="$(jq -nc \
+          --arg repo "$REPO" \
+          --arg runId "$RUN_ID" \
+          --arg runAttempt "$RUN_ATTEMPT" \
+          --arg cmd "pr-check" \
+          --arg fp "$plan_fp" \
+          --arg res "$state" \
+          --argjson duration "$duration" \
+          --arg err "$err_code" \
+          '{schemaVersion:1,repository:$repo,runId:$runId,runAttempt:$runAttempt,command:$cmd,planFingerprint:(if $fp == "" then null else $fp end),result:$res,durationMs:$duration,errorCode:(if $err == "" then null else $err end)}' | tr -d '\r')"
+
+        rand_hex="$(od -An -tx1 -N12 /dev/urandom 2>/dev/null | tr -d ' \n' || printf '%s_%s_%s' "$(date +%s)" "$$" "${RANDOM:-0}")"
+        delimiter="MOONSET_EOF_${rand_hex}"
+        {
+          echo "state=$state"
+          echo "exit-code=$exit_code"
+          echo "should-comment=$should_comment"
+          echo "audit-event=$audit_json"
+          echo "comment<<$delimiter"
+          cat "$tmp_dir/comment.md"
+          echo ""
+          echo "$delimiter"
+        } >> "$GITHUB_OUTPUT"
+        if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+          {
+            echo "### moonset pr-check"
+            echo ""
+            echo "| State | Exit Code | Duration (ms) |"
+            echo "|---|---|---|"
+            echo "| \`$state\` | \`$exit_code\` | \`$duration\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi

@@ -1,0 +1,602 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "unmbt/moonset/model"
+
+import {
+  "moonbitlang/core/debug",
+  "moonbitlang/core/json",
+}
+
+// Values
+pub fn canonical_json(@json.Json) -> String
+
+pub fn diagnostic(String, String, path? : String, line? : Int32, column? : Int32, json_path? : String) -> Diagnostic
+
+pub fn fingerprint(@json.Json) -> String
+
+// Errors
+pub(all) suberror MoonsetError {
+  Invalid(Diagnostic)
+  Io(String)
+}
+
+// Types and methods
+#derive(Eq, @debug.Debug)
+pub(all) enum Access {
+  Public
+  Restricted
+}
+pub fn Access::equal(Self, Self) -> Bool
+pub fn Access::not_equal(Self, Self) -> Bool
+pub fn Access::parse(String) -> Self?
+pub fn Access::text(Self) -> String
+pub fn Access::to_repr(Self) -> @debug.Repr
+
+pub(all) struct ApplyResult {
+  applied : Bool
+  rolled_back : Bool
+  journal : String?
+  state : ReleaseState?
+}
+pub fn ApplyResult::to_json(Self) -> @json.Json
+
+pub(all) struct ArtifactIntent {
+  id : String
+  unit_id : String
+  version : String
+  target : String
+  required : Bool
+  source_commit : String?
+  expected_hash : String?
+  path : String?
+}
+pub fn ArtifactIntent::to_json(Self) -> @json.Json
+
+#derive(Eq, @debug.Debug)
+pub(all) struct ArtifactTargetSpec {
+  target : String
+  linked_package : String?
+  required : Bool
+  path : String?
+}
+pub fn ArtifactTargetSpec::equal(Self, Self) -> Bool
+pub fn ArtifactTargetSpec::not_equal(Self, Self) -> Bool
+pub fn ArtifactTargetSpec::to_repr(Self) -> @debug.Repr
+
+pub(all) struct Bridge {
+  consumer : String
+  producer : String
+  bump : Bump
+  wait_for : BridgeWaitFor
+}
+
+#derive(Eq, @debug.Debug)
+pub(all) enum BridgeWaitFor {
+  Build
+  Publish
+}
+pub fn BridgeWaitFor::equal(Self, Self) -> Bool
+pub fn BridgeWaitFor::not_equal(Self, Self) -> Bool
+pub fn BridgeWaitFor::parse(String) -> Self?
+pub fn BridgeWaitFor::text(Self) -> String
+pub fn BridgeWaitFor::to_repr(Self) -> @debug.Repr
+
+#derive(Eq, @debug.Debug)
+pub(all) enum Bump {
+  None
+  Patch
+  Minor
+  Major
+}
+pub fn Bump::equal(Self, Self) -> Bool
+pub fn Bump::not_equal(Self, Self) -> Bool
+pub fn Bump::parse(String) -> Self?
+pub fn Bump::rank(Self) -> Int32
+pub fn Bump::text(Self) -> String
+pub fn Bump::to_repr(Self) -> @debug.Repr
+
+pub(all) struct Change {
+  unit_id : String
+  bump : Bump
+}
+
+pub(all) struct ChangelogConfig {
+  enabled : Bool
+  generator : String
+  file : String
+}
+pub fn ChangelogConfig::default() -> Self
+
+pub(all) struct ChangelogEntry {
+  unit_id : String
+  version : String
+  date : String
+  section : String
+  text : String
+  path : String
+  generator : String
+  metadata : @json.Json
+}
+pub fn ChangelogEntry::to_json(Self) -> @json.Json
+
+pub(all) struct Changeset {
+  id : String
+  releases : Array[Change]
+  summary : String
+  path : String
+  in_pre_dir : Bool
+}
+pub fn Changeset::to_json(Self) -> @json.Json
+
+pub(all) struct ChangesetDraft {
+  releases : Array[Change]
+  summary : String
+}
+
+pub(all) struct CommitConfig {
+  mode : CommitMode
+  add_message : String
+  version_message : String
+}
+pub fn CommitConfig::default() -> Self
+
+#derive(Eq, @debug.Debug)
+pub(all) enum CommitMode {
+  Never
+  Add
+  Version
+  Both
+}
+pub fn CommitMode::equal(Self, Self) -> Bool
+pub fn CommitMode::not_equal(Self, Self) -> Bool
+pub fn CommitMode::parse(String) -> Self?
+pub fn CommitMode::text(Self) -> String
+pub fn CommitMode::to_repr(Self) -> @debug.Repr
+
+pub(all) struct Config {
+  fixed : Array[Array[String]]
+  linked : Array[Array[String]]
+  ignore : Array[String]
+  update_dependencies : Bump
+  update_dependents : UpdateDependents
+  only_update_peer_dependents_when_out_of_range : Bool
+  bump_versions_with_workspace_protocol_only : Bool
+  changed_patterns : Array[String]
+  formatter : String
+  format_mode : String
+  access : Access
+  base_branch : String
+  changelog : ChangelogConfig
+  commit : CommitConfig
+  private_packages : PrivatePackagesConfig
+  pre : PreConfig
+  snapshot : SnapshotConfig
+  tag : TagConfig
+  publisher : PublisherConfig
+  github : GithubConfig
+  generators : Map[String, GeneratorPluginConfig]
+  mixed : MixedWorkspacesConfig?
+}
+pub fn Config::bridges(Self) -> Array[Bridge]
+pub fn Config::default() -> Self
+pub fn Config::is_mixed(Self) -> Bool
+pub fn Config::lockfiles(Self) -> LockfileMode
+pub fn Config::mixed_workspaces(Self) -> Array[MixedWorkspaceSpec]
+pub fn Config::to_json(Self) -> @json.Json
+pub fn Config::unit_overrides(Self) -> Map[String, UnitOverride]
+
+pub(all) struct DependencyEdge {
+  producer : String
+  requirement : String
+  kind : DependencyKind
+  path : String
+  start : Int32
+  end : Int32
+  target_condition : String?
+}
+
+pub(all) struct DependencyIntent {
+  consumer : String
+  producer : String
+  kind : DependencyKind
+  producer_version : String
+  path : String
+  old_requirement : String
+  new_requirement : String
+  start : Int32
+  end : Int32
+}
+
+#derive(Eq, @debug.Debug)
+pub(all) enum DependencyKind {
+  Runtime
+  Build
+  Development
+  Optional
+  Peer
+}
+pub fn DependencyKind::equal(Self, Self) -> Bool
+pub fn DependencyKind::not_equal(Self, Self) -> Bool
+pub fn DependencyKind::parse(String) -> Self?
+pub fn DependencyKind::text(Self) -> String
+pub fn DependencyKind::to_repr(Self) -> @debug.Repr
+
+#derive(@debug.Debug)
+pub(all) struct Diagnostic {
+  code : String
+  message : String
+  path : String
+  line : Int32
+  column : Int32
+  json_path : String?
+}
+pub fn Diagnostic::to_json(Self) -> @json.Json
+pub fn Diagnostic::to_repr(Self) -> @debug.Repr
+
+#derive(Eq, @debug.Debug)
+pub(all) enum Ecosystem {
+  MoonBit
+  Npm
+  Cargo
+}
+pub fn Ecosystem::equal(Self, Self) -> Bool
+pub fn Ecosystem::not_equal(Self, Self) -> Bool
+pub fn Ecosystem::parse(String) -> Self?
+pub fn Ecosystem::text(Self) -> String
+pub fn Ecosystem::to_repr(Self) -> @debug.Repr
+
+pub(all) struct EcosystemWorkspace {
+  id : String
+  root : String
+  ecosystem : Ecosystem
+  manager : PackageManager
+}
+
+pub(all) struct FileEdit {
+  path : String
+  kind : String
+  owner : String
+  before_hash : String
+  after_text : String
+  atomic_write : Bool
+}
+pub fn FileEdit::to_json(Self) -> @json.Json
+
+pub(all) struct GeneratorPluginConfig {
+  program : String
+  args : Array[String]
+  allowed_programs : Array[String]
+  environment : Array[String]
+  timeout_ms : Int32
+  max_output_bytes : Int32
+}
+
+pub(all) struct GithubConfig {
+  repo : String?
+  links : Bool
+  thanks : Bool
+}
+pub fn GithubConfig::default() -> Self
+
+#derive(Eq, @debug.Debug)
+pub(all) enum LockfileMode {
+  Refresh
+  VerifyOnly
+}
+pub fn LockfileMode::equal(Self, Self) -> Bool
+pub fn LockfileMode::not_equal(Self, Self) -> Bool
+pub fn LockfileMode::parse(String) -> Self?
+pub fn LockfileMode::text(Self) -> String
+pub fn LockfileMode::to_repr(Self) -> @debug.Repr
+
+#derive(Eq, @debug.Debug)
+pub(all) enum MixedMode {
+  Coexist
+  Unified
+}
+pub fn MixedMode::equal(Self, Self) -> Bool
+pub fn MixedMode::not_equal(Self, Self) -> Bool
+pub fn MixedMode::parse(String) -> Self?
+pub fn MixedMode::text(Self) -> String
+pub fn MixedMode::to_repr(Self) -> @debug.Repr
+
+pub(all) struct MixedWorkspaceSpec {
+  id : String
+  ecosystem : Ecosystem
+  root : String
+  manager : PackageManager
+  include_root : Bool
+}
+
+pub(all) struct MixedWorkspacesConfig {
+  mode : MixedMode
+  workspaces : Array[MixedWorkspaceSpec]
+  bridges : Array[Bridge]
+  unit_overrides : Map[String, UnitOverride]
+  lockfiles : LockfileMode
+}
+
+pub(all) struct Ownership {
+  path : String
+  field : String
+  owner : String
+}
+
+pub(all) struct PackResult {
+  artifact_id : String
+  unit_id : String
+  version : String
+  target : String
+  archive_path : String
+  source_commit : String?
+  content_hash : String
+  verified : Bool
+}
+pub fn PackResult::to_json(Self) -> @json.Json
+
+#derive(Eq, @debug.Debug)
+pub(all) enum PackageManager {
+  Moon
+  Npm
+  Pnpm
+  Cargo
+}
+pub fn PackageManager::equal(Self, Self) -> Bool
+pub fn PackageManager::not_equal(Self, Self) -> Bool
+pub fn PackageManager::parse(String) -> Self?
+pub fn PackageManager::text(Self) -> String
+pub fn PackageManager::to_repr(Self) -> @debug.Repr
+
+pub(all) struct PreConfig {
+  file : String
+  directory : String
+}
+pub fn PreConfig::default() -> Self
+
+#derive(Eq, @debug.Debug)
+pub(all) enum PreMode {
+  Pre
+  Exit
+}
+pub fn PreMode::equal(Self, Self) -> Bool
+pub fn PreMode::not_equal(Self, Self) -> Bool
+pub fn PreMode::parse(String) -> Self?
+pub fn PreMode::text(Self) -> String
+pub fn PreMode::to_repr(Self) -> @debug.Repr
+
+pub(all) struct PreState {
+  mode : PreMode
+  tag : String
+  legacy_consumed : Array[String]
+}
+pub fn PreState::new(PreMode, String) -> Self
+pub fn PreState::to_json(Self) -> @json.Json
+
+pub(all) struct PrivatePackagesConfig {
+  version : Bool
+  tag : Bool
+  publish : Bool
+}
+pub fn PrivatePackagesConfig::default() -> Self
+
+#derive(Eq, @debug.Debug)
+pub(all) struct PublishConfig {
+  access : Access?
+  registry : String?
+  directory : String?
+}
+pub fn PublishConfig::equal(Self, Self) -> Bool
+pub fn PublishConfig::not_equal(Self, Self) -> Bool
+pub fn PublishConfig::to_repr(Self) -> @debug.Repr
+
+pub(all) struct PublishResult {
+  schema_version : Int32
+  plan_id : String
+  dry_run : Bool
+  complete : Bool
+  statuses : Array[PublishStatus]
+  recovery_path : String?
+}
+pub fn PublishResult::to_json(Self) -> @json.Json
+
+#derive(Eq, @debug.Debug)
+pub(all) enum PublishState {
+  Pending
+  Preflighted
+  Published
+  Skipped
+  Failed
+  Blocked
+  Unknown
+}
+pub fn PublishState::equal(Self, Self) -> Bool
+pub fn PublishState::not_equal(Self, Self) -> Bool
+pub fn PublishState::parse(String) -> Self?
+pub fn PublishState::text(Self) -> String
+pub fn PublishState::to_repr(Self) -> @debug.Repr
+
+pub(all) struct PublishStatus {
+  plan_id : String
+  unit_id : String
+  version : String
+  target : String
+  registry : String
+  state : PublishState
+  digest : String?
+  external_id : String?
+  message : String?
+}
+pub fn PublishStatus::to_json(Self) -> @json.Json
+
+pub(all) struct PublishTarget {
+  unit_id : String
+  version : String
+  target : String
+  registry : String
+  publisher : String
+  artifact_id : String?
+  required : Bool
+}
+pub fn PublishTarget::to_json(Self) -> @json.Json
+
+pub(all) struct PublisherConfig {
+  kind : String
+  registry : String
+  dry_run_first : Bool
+  command : Array[String]
+  token_env : String?
+}
+pub fn PublisherConfig::default() -> Self
+
+pub(all) struct Release {
+  unit_id : String
+  old_version : String
+  new_version : String
+  level : Bump
+  reasons : Array[String]
+  changesets : Array[String]
+  publish : Bool
+}
+pub fn Release::to_json(Self) -> @json.Json
+
+pub(all) struct ReleasePlan {
+  fingerprint : String
+  releases : Array[Release]
+  dependency_updates : Array[DependencyIntent]
+  affected_paths : Array[String]
+  changesets : Array[Changeset]
+  next_pre_state : PreState?
+  warnings : Array[Diagnostic]
+  generated_at : String?
+  is_snapshot : Bool
+}
+pub fn ReleasePlan::to_json(Self) -> @json.Json
+
+pub(all) struct ReleaseState {
+  plan_fingerprint : String
+  source_head : String?
+  is_snapshot : Bool
+  releases : Array[Release]
+  tags : Array[TagIntent]
+  consumed_changesets : Array[String]
+}
+pub fn ReleaseState::from_json(@json.Json, path? : String) -> Self raise MoonsetError
+pub fn ReleaseState::to_json(Self) -> @json.Json
+
+pub(all) struct ReleaseUnit {
+  id : String
+  native_name : String
+  ecosystem : Ecosystem
+  workspace_id : String
+  root : String
+  manifest : String
+  version_path : String
+  version_field : String
+  version : String?
+  version_span : TextSpan?
+  visibility : Visibility
+  publish : Bool
+  publish_config : PublishConfig?
+  dependencies : Array[DependencyEdge]
+}
+
+pub(all) struct SnapshotConfig {
+  enabled : Bool
+  use_calculated_version : Bool
+  prerelease_template : String
+}
+pub fn SnapshotConfig::default() -> Self
+
+pub(all) struct TagConfig {
+  create : Bool
+  after_publish : Bool
+  format : String
+  push : Bool
+}
+pub fn TagConfig::default() -> Self
+
+pub(all) struct TagIntent {
+  unit_id : String
+  version : String
+  name : String
+}
+pub fn TagIntent::to_json(Self) -> @json.Json
+
+#derive(Eq, @debug.Debug)
+pub(all) struct TextSpan {
+  start : Int32
+  end : Int32
+}
+pub fn TextSpan::equal(Self, Self) -> Bool
+pub fn TextSpan::not_equal(Self, Self) -> Bool
+pub fn TextSpan::to_repr(Self) -> @debug.Repr
+
+pub(all) struct UnitOverride {
+  publish : Bool?
+  publisher : String?
+  tag_format : String?
+  artifacts : Array[ArtifactTargetSpec]
+}
+
+#derive(Eq, @debug.Debug)
+pub(all) enum UpdateDependents {
+  OutOfRange
+  Always
+}
+pub fn UpdateDependents::equal(Self, Self) -> Bool
+pub fn UpdateDependents::not_equal(Self, Self) -> Bool
+pub fn UpdateDependents::parse(String) -> Self?
+pub fn UpdateDependents::text(Self) -> String
+pub fn UpdateDependents::to_repr(Self) -> @debug.Repr
+
+pub(all) struct VersionOptions {
+  dry_run : Bool
+  no_changelog : Bool
+  snapshot_tag : String?
+  snapshot : Bool
+}
+pub fn VersionOptions::default() -> Self
+
+pub(all) struct VersionPlan {
+  schema_version : Int32
+  stage : String
+  executable : Bool
+  fingerprint : String
+  edits : Array[FileEdit]
+  changelogs : Array[ChangelogEntry]
+  tags : Array[TagIntent]
+  consumed_changesets : Array[String]
+  analysis : ReleasePlan
+  generated_at : String?
+}
+pub fn VersionPlan::to_json(Self) -> @json.Json
+
+#derive(Eq, @debug.Debug)
+pub(all) enum Visibility {
+  Public
+  Restricted
+  Private
+}
+pub fn Visibility::equal(Self, Self) -> Bool
+pub fn Visibility::not_equal(Self, Self) -> Bool
+pub fn Visibility::parse(String) -> Self?
+pub fn Visibility::text(Self) -> String
+pub fn Visibility::to_repr(Self) -> @debug.Repr
+
+pub(all) struct WorkspaceSnapshot {
+  root : String
+  workspaces : Array[EcosystemWorkspace]
+  units : Array[ReleaseUnit]
+  ownership : Array[Ownership]
+  unmanaged : Array[String]
+  config : Config
+  sources : Map[String, String]
+  changed_files : Array[String]
+  warnings : Array[Diagnostic]
+  git_head : String?
+}
+pub fn WorkspaceSnapshot::to_json(Self) -> @json.Json
+
+// Type aliases
+pub type UnitId = String
+
+// Traits
