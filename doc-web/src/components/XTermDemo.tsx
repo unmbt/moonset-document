@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -207,8 +207,8 @@ export function XTermDemo({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Sync xterm.js color palette with light/dark theme
-  useEffect(() => {
+  // Sync xterm.js color palette synchronously before paint so View Transitions capture the new terminal theme
+  useLayoutEffect(() => {
     const term = termRef.current;
     if (!term || !terminalReady) return;
     term.options.theme = theme === 'dark' ? DARK_XTERM_THEME : LIGHT_XTERM_THEME;

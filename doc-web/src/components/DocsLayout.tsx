@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronDown,
   ChevronLeft,
@@ -16,7 +16,7 @@ import {
 } from '../lib/docsCatalog';
 import { getAllDocContents, getDocContent } from '../lib/docsLoader';
 import { extractHeadings } from '../lib/markdown';
-import { MarkdownRenderer } from './MarkdownRenderer';
+import { MarkdownRenderer, scrollToHeadingById } from './MarkdownRenderer';
 
 interface DocsLayoutProps {
   slug: string;
@@ -33,6 +33,7 @@ export function DocsLayout({ slug, onNavigate }: DocsLayoutProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [activeHeadingId, setActiveHeadingId] = useState<string>('');
+  const manualJumpUntilRef = useRef<number>(0);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
     const initial: Record<string, boolean> = {};
     for (const section of DOC_SECTIONS) {
@@ -61,6 +62,7 @@ export function DocsLayout({ slug, onNavigate }: DocsLayoutProps) {
     }
 
     const handleScroll = () => {
+      if (performance.now() < manualJumpUntilRef.current) return;
       let current = headings[0].id;
       for (const h of headings) {
         const el = document.getElementById(h.id);
@@ -123,7 +125,7 @@ export function DocsLayout({ slug, onNavigate }: DocsLayoutProps) {
 
       {/* Search results or multi-level sidebar tree */}
       {searchQuery.trim() ? (
-        <div className="space-y-1.5 overflow-y-auto pr-1">
+        <div className="moonset-quiet-scroll space-y-1.5 overflow-y-auto pr-1">
           <div className="px-2 pb-1 text-[11px] font-medium text-slate-500 dark:text-slate-400">
             找到 {searchHits.length} 篇匹配文档
           </div>
@@ -155,7 +157,7 @@ export function DocsLayout({ slug, onNavigate }: DocsLayoutProps) {
           )}
         </div>
       ) : (
-        <nav aria-label="文档目录" className="space-y-5 overflow-y-auto pr-2">
+        <nav aria-label="文档目录" className="moonset-quiet-scroll space-y-5 overflow-y-auto pr-2">
           {DOC_SECTIONS.map((section) => {
             const expanded = openGroups[section.id] ?? true;
             return (
@@ -266,7 +268,7 @@ export function DocsLayout({ slug, onNavigate }: DocsLayoutProps) {
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto">{sidebarContent}</div>
+            <div className="moonset-quiet-scroll min-h-0 flex-1 overflow-y-auto">{sidebarContent}</div>
           </aside>
         </div>
       )}
@@ -275,7 +277,7 @@ export function DocsLayout({ slug, onNavigate }: DocsLayoutProps) {
       <div className="grid grid-cols-1 gap-10 lg:grid-cols-[232px_minmax(0,1fr)] xl:grid-cols-[232px_minmax(0,1fr)_196px]">
         {/* Left sticky sidebar */}
         <aside className="hidden lg:block">
-          <div className="sticky top-24 max-h-[calc(100vh-7.5rem)] overflow-y-auto">
+          <div className="moonset-quiet-scroll sticky top-24 max-h-[calc(100vh-7.5rem)] overflow-y-auto">
             {sidebarContent}
           </div>
         </aside>
@@ -358,7 +360,7 @@ export function DocsLayout({ slug, onNavigate }: DocsLayoutProps) {
 
         {/* Right sticky On-This-Page outline */}
         <aside className="hidden xl:block">
-          <div className="sticky top-24 max-h-[calc(100vh-7.5rem)] overflow-y-auto border-l border-slate-900/[0.07] pl-4 dark:border-white/[0.07]">
+          <div className="moonset-quiet-scroll sticky top-24 max-h-[calc(100vh-7.5rem)] overflow-y-auto border-l border-slate-900/[0.07] pl-4 dark:border-white/[0.07]">
             <div className="mb-3 text-xs font-semibold text-slate-900 dark:text-slate-100">
               本页目录
             </div>
@@ -376,9 +378,9 @@ export function DocsLayout({ slug, onNavigate }: DocsLayoutProps) {
                         href={`#${h.id}`}
                         onClick={(e) => {
                           e.preventDefault();
-                          const el = document.getElementById(h.id);
-                          el?.scrollIntoView({ behavior: 'smooth' });
+                          manualJumpUntilRef.current = performance.now() + 700;
                           setActiveHeadingId(h.id);
+                          scrollToHeadingById(h.id);
                         }}
                         className={`block truncate py-0.5 transition-colors ${
                           active

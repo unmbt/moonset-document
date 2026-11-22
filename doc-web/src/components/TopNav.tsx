@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type MouseEvent } from 'react';
 import { Menu, Moon, Sun, X } from 'lucide-react';
 import type { ResolvedTheme, ThemePreference } from '../lib/theme';
 
@@ -9,7 +9,7 @@ interface TopNavProps {
   onNavigate: (route: string) => void;
   resolvedTheme: ResolvedTheme;
   themePreference: ThemePreference;
-  onToggleTheme: () => void;
+  onToggleTheme: (event: MouseEvent<HTMLButtonElement>) => void;
 }
 
 const NAV_LINKS: Array<{

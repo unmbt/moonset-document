@@ -40,13 +40,69 @@ export function slugifyHeading(text: string): string {
     .replace(/^-|-$/g, '');
 }
 
+export function createHeadingIdFactory() {
+  const counts = new Map<string, number>();
+  let index = 0;
+  return (rawText: string): string => {
+    index += 1;
+    const baseId = slugifyHeading(rawText) || `section-${index}`;
+    const seen = counts.get(baseId) ?? 0;
+    counts.set(baseId, seen + 1);
+    return seen === 0 ? baseId : `${baseId}-${seen}`;
+  };
+}
+
+interface HastNode {
+  type?: string;
+  tagName?: string;
+  value?: string;
+  properties?: Record<string, unknown>;
+  children?: HastNode[];
+}
+
+function getHastText(node: HastNode): string {
+  if (node.type === 'text' && typeof node.value === 'string') {
+    return node.value;
+  }
+  if (Array.isArray(node.children)) {
+    return node.children.map(getHastText).join('');
+  }
+  return '';
+}
+
+/**
+ * Pure rehype plugin that assigns deterministic heading IDs to h2/h3 nodes
+ * inside the unified AST pipeline (immune to React StrictMode double-renders).
+ */
+export function rehypeHeadingIds() {
+  return (tree: HastNode) => {
+    const nextId = createHeadingIdFactory();
+    const visit = (node: HastNode) => {
+      if (
+        node.type === 'element' &&
+        (node.tagName === 'h2' || node.tagName === 'h3')
+      ) {
+        const text = getHastText(node).trim();
+        node.properties = node.properties ?? {};
+        node.properties.id = nextId(text);
+      }
+      if (Array.isArray(node.children)) {
+        for (const child of node.children) {
+          visit(child);
+        }
+      }
+    };
+    visit(tree);
+  };
+}
+
 /**
  * Extracts H2 and H3 headings from Markdown while ignoring fenced code blocks.
  */
 export function extractHeadings(markdown: string): DocHeading[] {
   const lines = markdown.replace(/\r\n/g, '\n').split('\n');
   const headings: DocHeading[] = [];
-  const counts = new Map<string, number>();
+  const nextId = createHeadingIdFactory();
   let inFence = false;
   let fenceChar = '';
 
@@ -75,11 +131,7 @@ export function extractHeadings(markdown: string): DocHeading[] {
       .replace(/[*_~]/g, '')
       .trim();
 
-    const baseId = slugifyHeading(rawText) || `section-${headings.length + 1}`;
-    const seen = counts.get(baseId) ?? 0;
-    counts.set(baseId, seen + 1);
-    const id = seen === 0 ? baseId : `${baseId}-${seen}`;
-
+    const id = nextId(rawText);
     headings.push({ id, text: rawText, level });
   }
 

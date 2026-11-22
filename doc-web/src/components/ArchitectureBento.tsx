@@ -143,11 +143,23 @@ export function ArchitectureBento({ onNavigate }: ArchitectureBentoProps) {
               </p>
             </div>
 
-            <pre className="mt-6 overflow-x-auto rounded-xl border border-slate-900/[0.06] bg-slate-50/85 px-4 py-3.5 font-mono text-xs leading-relaxed text-slate-700 dark:border-white/[0.06] dark:bg-[#0A0C13] dark:text-slate-300">
-{`cmd/moonset ──▶ cli ──▶ workspace + engine + executor + changelog + adapters ──▶ model
-                                            │
-                                      api / moonset.mbt（对外稳定门面）`}
-            </pre>
+            <div className="mt-6 rounded-xl border border-slate-900/[0.06] bg-slate-50/85 p-4 font-mono text-xs dark:border-white/[0.06] dark:bg-[#0A0C13]">
+              <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 text-slate-800 dark:text-slate-200">
+                <span className="text-slate-500 dark:text-slate-400">cmd/moonset</span>
+                <span aria-hidden="true" className="text-slate-400 dark:text-slate-600">→</span>
+                <span>cli</span>
+                <span aria-hidden="true" className="text-slate-400 dark:text-slate-600">→</span>
+                <span className="text-indigo-600 dark:text-indigo-400">
+                  workspace · executor · adapters
+                </span>
+                <span aria-hidden="true" className="text-slate-400 dark:text-slate-600">→</span>
+                <span>engine · changelog · model</span>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-900/[0.06] pt-2.5 text-[11px] text-slate-500 dark:border-white/[0.06] dark:text-slate-400">
+                <span>对外门面 · api / moonset.mbt</span>
+                <span>纯核零 I/O · native + wasm-gc</span>
+              </div>
+            </div>
           </div>
         </div>
 

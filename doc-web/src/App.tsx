@@ -1,9 +1,14 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
+import { flushSync } from 'react-dom';
 import {
   THEME_STORAGE_KEY,
+  THEME_TRANSITION_DURATION_MS,
+  THEME_TRANSITION_EASING,
+  computeCircularRevealGeometry,
   nextThemePreference,
   parseStoredTheme,
   resolveTheme,
+  resolveThemeTransitionOrigin,
   type ThemePreference,
 } from './lib/theme';
 import { AmbientBackground } from './components/AmbientBackground';
@@ -15,6 +20,7 @@ import { ArchitectureBento } from './components/ArchitectureBento';
 import { DocsLayout } from './components/DocsLayout';
 import { ChangelogPage } from './components/ChangelogPage';
 import { Footer } from './components/Footer';
+import { useSmoothScroll } from './hooks/useSmoothScroll';
 
 function parseHashRoute(hash: string): { path: string; anchor?: string } {
   const cleaned = hash.replace(/^#/, '');
@@ -34,6 +40,7 @@ function getActiveSection(path: string): ActiveRouteSection {
 }
 
 export function App() {
+  useSmoothScroll();
   const [route, setRoute] = useState<string>(() => parseHashRoute(window.location.hash).path);
   const [systemPrefersDark, setSystemPrefersDark] = useState<boolean>(() =>
     typeof window !== 'undefined' && window.matchMedia
@@ -113,9 +120,108 @@ export function App() {
     }
   }, []);
 
-  const handleToggleTheme = useCallback(() => {
-    setThemePref((prev) => nextThemePreference(prev, systemPrefersDark));
-  }, [systemPrefersDark]);
+  const themeTransitionSeqRef = useRef(0);
+
+  const handleToggleTheme = useCallback(
+    (event?: MouseEvent<HTMLButtonElement>) => {
+      const nextPref = nextThemePreference(themePref, systemPrefersDark);
+      const nextResolved = resolveTheme(nextPref, systemPrefersDark);
+
+      const applyThemeUpdate = () => {
+        document.documentElement.classList.toggle('dark', nextResolved === 'dark');
+        flushSync(() => {
+          setThemePref(nextPref);
+        });
+      };
+
+      const prefersReducedMotion =
+        typeof window !== 'undefined' &&
+        window.matchMedia &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      const startViewTransition = (
+        document as Document & {
+          startViewTransition?: (updateCallback: () => void) => {
+            ready: Promise<void>;
+            finished: Promise<void>;
+          };
+        }
+      ).startViewTransition?.bind(document);
+
+      if (!startViewTransition || prefersReducedMotion) {
+        setThemePref(nextPref);
+        return;
+      }
+
+      const viewport = {
+        width: window.innerWidth,
+        height: window.innerHeight,
+      };
+      const fallbackRect = event?.currentTarget?.getBoundingClientRect();
+      const origin = resolveThemeTransitionOrigin(
+        event ? { clientX: event.clientX, clientY: event.clientY, detail: event.detail } : null,
+        fallbackRect,
+        viewport,
+      );
+      const { x, y, endRadius } = computeCircularRevealGeometry(origin, viewport);
+
+      const root = document.documentElement;
+      const seq = ++themeTransitionSeqRef.current;
+      root.classList.add('theme-transitioning');
+
+      let cleanupTimer: number | null = null;
+      const cleanup = () => {
+        if (cleanupTimer !== null) {
+          window.clearTimeout(cleanupTimer);
+          cleanupTimer = null;
+        }
+        if (themeTransitionSeqRef.current === seq) {
+          root.classList.remove('theme-transitioning');
+        }
+      };
+
+      cleanupTimer = window.setTimeout(cleanup, THEME_TRANSITION_DURATION_MS + 450);
+
+      let transition: { ready: Promise<void>; finished: Promise<void> };
+      try {
+        transition = startViewTransition(() => {
+          applyThemeUpdate();
+        });
+      } catch {
+        cleanup();
+        setThemePref(nextPref);
+        return;
+      }
+
+      transition.ready
+        .then(() => {
+          root.animate(
+            {
+              clipPath: [
+                `circle(0px at ${x}px ${y}px)`,
+                `circle(${endRadius}px at ${x}px ${y}px)`,
+              ],
+            },
+            {
+              duration: THEME_TRANSITION_DURATION_MS,
+              easing: THEME_TRANSITION_EASING,
+              fill: 'both',
+              pseudoElement: '::view-transition-new(root)',
+            },
+          );
+        })
+        .catch(() => {
+          // Ignore AbortError when rapid clicks supersede an active view transition
+        });
+
+      transition.finished
+        .catch(() => {
+          // Ignore aborted transition rejections
+        })
+        .finally(cleanup);
+    },
+    [themePref, systemPrefersDark],
+  );
 
   const activeSection = getActiveSection(route);
   const isDocsRoute = route.startsWith('/docs');

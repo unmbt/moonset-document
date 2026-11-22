@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  computeCircularRevealGeometry,
   nextThemePreference,
   parseStoredTheme,
   resolveTheme,
+  resolveThemeTransitionOrigin,
 } from './theme';
 import {
   computeSectionProgress,
@@ -12,6 +14,7 @@ import {
 import {
   extractHeadings,
   parseChangelog,
+  rehypeHeadingIds,
   resolveRelativeDocSlug,
   slugifyHeading,
 } from './markdown';
@@ -22,6 +25,17 @@ import {
   searchDocs,
 } from './docsCatalog';
 import { evaluateInteractiveCommand, getScenarioById } from './terminalScripts';
+import {
+  DEFAULT_SMOOTH_SCROLL_CONFIG,
+  accumulateScrollTarget,
+  normalizeWheelDelta,
+  softLimitWheelDelta,
+  stepInertialScroll,
+} from './smoothScroll';
+import {
+  highlightCodeLines,
+  normalizeCodeLanguage,
+} from './highlight';
 
 test('theme defaults to system and toggles with immediate visual change', () => {
   assert.equal(parseStoredTheme(null), 'system');
@@ -39,6 +53,39 @@ test('theme defaults to system and toggles with immediate visual change', () => 
   assert.equal(step1Light, 'dark');
   assert.equal(resolveTheme(step1Light, false), 'dark');
   assert.equal(nextThemePreference(step1Light, false), 'system');
+});
+
+test('circular View Transition origin and radius geometry cover full viewport from click or keyboard', () => {
+  const viewport = { width: 1440, height: 900 };
+  const buttonRect = { left: 1200, top: 14, width: 36, height: 36 };
+
+  // Pointer click uses exact click coordinates
+  const pointerOrigin = resolveThemeTransitionOrigin(
+    { clientX: 1215, clientY: 31, detail: 1 },
+    buttonRect,
+    viewport,
+  );
+  assert.deepEqual(pointerOrigin, { x: 1215, y: 31 });
+
+  // Keyboard activation (detail=0, 0,0) falls back to button center
+  const keyboardOrigin = resolveThemeTransitionOrigin(
+    { clientX: 0, clientY: 0, detail: 0 },
+    buttonRect,
+    viewport,
+  );
+  assert.deepEqual(keyboardOrigin, { x: 1218, y: 32 });
+
+  // Radius from top-right button reaches bottom-left corner (0, 900)
+  const geom = computeCircularRevealGeometry(pointerOrigin, viewport);
+  assert.equal(geom.x, 1215);
+  assert.equal(geom.y, 31);
+  assert.ok(Math.abs(geom.endRadius - Math.hypot(1215, 900 - 31)) < 0.001);
+
+  // Out-of-bounds origin is clamped to viewport bounds
+  const clamped = computeCircularRevealGeometry({ x: -40, y: 1200 }, viewport);
+  assert.equal(clamped.x, 0);
+  assert.equal(clamped.y, 900);
+  assert.ok(Math.abs(clamped.endRadius - Math.hypot(1440, 900)) < 0.001);
 });
 
 test('scroll timeline computes bounded progress and active chapters', () => {
@@ -75,6 +122,38 @@ test('markdown heading extraction ignores fenced code blocks and deduplicates ID
   assert.equal(headings[0].id, slugifyHeading('快速开始'));
   assert.equal(headings[1].text, 'CLI status 命令');
   assert.equal(headings[2].id, `${slugifyHeading('快速开始')}-1`);
+
+  // Verify rehypeHeadingIds assigns identical IDs to HAST heading nodes
+  const ast: {
+    type: string;
+    children: Array<{
+      type: string;
+      tagName: string;
+      properties: Record<string, unknown>;
+      children: unknown[];
+    }>;
+  } = {
+    type: 'root',
+    children: [
+      { type: 'element', tagName: 'h2', properties: {}, children: [{ type: 'text', value: '快速开始' }] },
+      {
+        type: 'element',
+        tagName: 'h3',
+        properties: {},
+        children: [
+          { type: 'text', value: 'CLI ' },
+          { type: 'element', tagName: 'code', children: [{ type: 'text', value: 'status' }] },
+          { type: 'text', value: ' 命令' },
+        ],
+      },
+      { type: 'element', tagName: 'h2', properties: {}, children: [{ type: 'text', value: '快速开始' }] },
+    ],
+  };
+  rehypeHeadingIds()(ast as never);
+  assert.deepEqual(
+    ast.children.map((node) => node.properties.id),
+    headings.map((h) => h.id),
+  );
 });
 
 test('relative doc link resolution maps markdown paths to SPA routes', () => {
@@ -146,4 +225,65 @@ test('interactive terminal evaluator handles help, doctor, and scenario switchin
   assert.equal(evaluateInteractiveCommand('moonset status').switchScenario, 'status');
   assert.ok(evaluateInteractiveCommand('moonset doctor').lines.length >= 4);
   assert.ok(evaluateInteractiveCommand('help').lines.some((l) => l.includes('moonset add')));
+});
+
+test('smooth scroll soft-limits fast wheel bursts and caps maximum vertical velocity', () => {
+  assert.equal(normalizeWheelDelta(3, 1, 900), 108);
+  assert.ok(softLimitWheelDelta(1200, 190) <= 190);
+  assert.ok(softLimitWheelDelta(-1200, 190) >= -190);
+  // Small deltas stay close to 1:1
+  assert.ok(Math.abs(softLimitWheelDelta(20, 190) - 20) < 0.5);
+
+  // Lead distance is bounded so rapid scrolling doesn't queue infinite runaway inertia
+  const boundedTarget = accumulateScrollTarget(500, 1100, 180, 5000, 680);
+  assert.equal(boundedTarget, 1180);
+
+  // Velocity cap holds even for large remaining distance
+  const dtMs = 16;
+  const maxAllowedStep = DEFAULT_SMOOTH_SCROLL_CONFIG.maxVelocityPxPerSec * (dtMs / 1000);
+  const step = stepInertialScroll(0, 5000, dtMs, DEFAULT_SMOOTH_SCROLL_CONFIG);
+  assert.equal(step.settled, false);
+  assert.ok(step.nextY <= maxAllowedStep + 0.001);
+
+  // Settles cleanly when within stop threshold
+  const done = stepInertialScroll(99.8, 100, 16, DEFAULT_SMOOTH_SCROLL_CONFIG);
+  assert.equal(done.settled, true);
+  assert.equal(done.nextY, 100);
+});
+
+test('shiki highlighter normalizes aliases and produces dual-theme syntax tokens losslessly', () => {
+  assert.equal(normalizeCodeLanguage('sh'), 'bash');
+  assert.equal(normalizeCodeLanguage('YML'), 'yaml');
+  assert.equal(normalizeCodeLanguage('mbt'), 'moonbit');
+  assert.equal(normalizeCodeLanguage('ps1'), 'powershell');
+  assert.equal(normalizeCodeLanguage('jsonc'), 'json');
+  assert.equal(normalizeCodeLanguage('text'), null);
+  assert.equal(normalizeCodeLanguage('unknown-lang'), null);
+
+  const samples: Array<{ lang: string; code: string }> = [
+    { lang: 'bash', code: 'moon install unmbt/moonset/cmd/moonset\nmoonset status --verbose' },
+    { lang: 'json', code: '{\n  "baseBranch": "main",\n  "access": "public"\n}' },
+    { lang: 'yaml', code: 'name: Release\non:\n  push:\n    branches: [main]' },
+    { lang: 'moonbit', code: 'pub fn plan(version : String) -> Int {\n  42\n}' },
+    { lang: 'powershell', code: 'irm https://example.com/install.ps1 | iex' },
+  ];
+
+  for (const sample of samples) {
+    const res = highlightCodeLines(sample.code, sample.lang);
+    assert.equal(res.language, sample.lang);
+    const roundTripped = res.lines.map((line) => line.map((t) => t.content).join('')).join('\n');
+    assert.equal(roundTripped, sample.code);
+
+    const flatTokens = res.lines.flat();
+    const lightColors = new Set(flatTokens.map((t) => t.lightColor).filter(Boolean));
+    const darkColors = new Set(flatTokens.map((t) => t.darkColor).filter(Boolean));
+    assert.ok(lightColors.size >= 2, `expected multiple light token colors for ${sample.lang}`);
+    assert.ok(darkColors.size >= 2, `expected multiple dark token colors for ${sample.lang}`);
+  }
+
+  // Plain text falls back cleanly without throwing
+  const plain = highlightCodeLines('hello\nworld', 'text');
+  assert.equal(plain.language, null);
+  assert.equal(plain.lines.length, 2);
+  assert.equal(plain.lines[0][0].content, 'hello');
 });
